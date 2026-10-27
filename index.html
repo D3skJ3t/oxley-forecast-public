@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Oxley Forecast Compare</title>
+<title>Forecast Compare</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="theme-color" content="#eef3f4">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -124,6 +124,12 @@ svg{display:block;width:100%;height:auto;max-width:100%}
 .tip .tc{font:600 .68rem var(--mono);color:var(--accent);margin-bottom:2px}
 .tip .tv{font:.78rem var(--mono);color:var(--muted)}
 .tip .tv b{color:var(--fg);font-weight:600}
+/* Location picker: the page title is the dropdown */
+.loctitle select{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px 36px 4px 10px;max-width:100%;cursor:pointer;
+  appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:right 16px center,right 10px center;background-size:6px 6px;background-repeat:no-repeat}
+.loctitle select:hover{border-color:var(--accent)}
+.loctitle select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 /* Your weather sites panel */
 .panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
 .card{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--c,var(--line));border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:3px;min-width:0}
@@ -154,8 +160,8 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
 <div class="wrap">
   <header>
     <div class="meta">
-      <span class="eyebrow">Oxley QLD 4075 · 27.56°S 152.98°E</span>
-      <h1>Oxley Forecast Compare</h1>
+      <span class="eyebrow" id="eyebrow">Forecast compare</span>
+      <h1 class="loctitle"><select id="loc" aria-label="Choose a location"><option>Loading locations…</option></select></h1>
       <span class="status" id="status">Loading forecasts…</span>
     </div>
     <button class="btn" id="refresh" type="button">Refresh</button>
@@ -192,7 +198,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
         <tbody id="tbody"></tbody>
       </table>
     </div>
-    <p class="note">The top row is the Bureau of Meteorology's official forecast for Oxley, written by its forecasters. The diamond rows are what the other forecast sites show for Oxley (Weatherzone uses its Archerfield forecast point). Red figures sit 3°C or more away from the median of all rows. Weather Underground and Windy don't publish a chance of rain.</p>
+    <p class="note">The top row is the Bureau of Meteorology's official forecast for this location, written by its forecasters. The diamond rows are what the other forecast sites show for it. Where a site has no page for the exact place, it uses a nearby one, named under the site (for example, Weatherzone uses Archerfield for Oxley). Red figures sit 3°C or more away from the median of all rows. Weather Underground and Windy don't publish a chance of rain.</p>
   </section>
 
   <section class="chartcard" aria-labelledby="charth">
@@ -221,14 +227,18 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
 
 <script>
 (function(){
-  const CACHE="oxley-public-v1"; // own key: this page shares storage with the private app at d3skj3t.github.io
-  const BOM_GEO="r7hg1p"; // Bureau location code (geohash) for Oxley
-  const BOM_API="https://api.weather.bom.gov.au/v1/locations/"+BOM_GEO;
-  function localDate(iso){const t=new Date(iso);if(isNaN(t))return null;return new Date(t.getTime()+10*3600e3).toISOString().slice(0,10);}
+  // Own storage keys: this page shares storage with the private app at d3skj3t.github.io
+  const CACHE="oxley-public-v1",LOC_KEY="oxley-public-loc";
+  // Locations come from locations.json, the same list the scraper uses
+  let LOCS=[];
+  const cacheKey=()=>CACHE+":"+state.loc.id;
+  // A date (YYYY-MM-DD) in the selected location's own time zone (Sydney and Byron Bay have daylight saving)
+  function localDate(iso){const t=new Date(iso);if(isNaN(t))return null;
+    return new Intl.DateTimeFormat("en-CA",{timeZone:state.loc.tz,year:"numeric",month:"2-digit",day:"2-digit"}).format(t);}
   async function loadBom(){
-    const out={daily:{},obs:null,ok:false};
+    const out={daily:{},obs:null,ok:false},api="https://api.weather.bom.gov.au/v1/locations/"+state.loc.bom;
     const get=u=>fetch(u).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();});
-    const [f,o]=await Promise.allSettled([get(BOM_API+"/forecasts/daily"),get(BOM_API+"/observations")]);
+    const [f,o]=await Promise.allSettled([get(api+"/forecasts/daily"),get(api+"/observations")]);
     if(f.status==="fulfilled"&&Array.isArray(f.value?.data)){
       f.value.data.forEach(d=>{const k=localDate(d.date);if(!k)return;const a=d.rain?.amount||{};
         out.daily[k]={tmax:d.temp_max,tmin:d.temp_min,rmin:a.min,rmax:a.max,chance:d.rain?.chance,text:(d.short_text||"").replace(/\.$/,"")};});
@@ -236,8 +246,8 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     if(o.status==="fulfilled"&&o.value?.data){out.obs=o.value.data;}
     return out;
   }
-  // Scraped forecast sites: published by this repo's own scraper every 3 hours
-  const DATA_URL="https://raw.githubusercontent.com/D3skJ3t/oxley-forecast-public/main/data/forecast.json";
+  // Scraped forecast sites: published by this repo's own scraper, each location about every 3 hours
+  const dataUrl=()=>"https://raw.githubusercontent.com/D3skJ3t/oxley-forecast-public/main/data/"+state.loc.id+".json";
   const SITES=[{id:"weatherzone",name:"Weatherzone",c:"--s1"},{id:"willyweather",name:"WillyWeather",c:"--s2"},{id:"elders",name:"Elders Weather",c:"--s3"},{id:"wunderground",name:"Weather Underground",c:"--s5"},{id:"windy",name:"Windy",c:"--s6"}];
   // Harris's list, in his order, for the "Your weather sites" panel
   const PANEL=[{kind:"site",id:"weatherzone",name:"Weatherzone",dom:"weatherzone.com.au",c:"--s1"},
@@ -248,7 +258,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     {kind:"obs",name:"BOM Latest Observations",dom:"bom.gov.au/qld/observations",c:"--bom"},
     {kind:"site",id:"elders",name:"Elders Weather",dom:"eldersweather.com.au",c:"--s3"}];
   async function loadScraped(){
-    const r=await fetch(DATA_URL,{cache:"no-store"});
+    const r=await fetch(dataUrl(),{cache:"no-store"});
     if(!r.ok)throw new Error("scraped "+r.status);
     return{state:"ok",data:await r.json()};
   }
@@ -261,9 +271,9 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
   function median(a){a=a.filter(isNum).sort((x,y)=>x-y);if(!a.length)return null;const m=a.length>>1;return a.length%2?a[m]:(a[m-1]+a[m])/2;}
   function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
   function ago(iso){const m=Math.round((Date.now()-Date.parse(iso))/60000);if(!isFinite(m))return"time unknown";if(m<60)return m+" min ago";const h=Math.round(m/60);return h<48?h+" h ago":Math.round(h/24)+" days ago";}
-  let state={data:null,sel:0,measure:"tmax",scrape:{state:"pending"}};
+  let state={data:null,sel:0,measure:"tmax",scrape:{state:"pending"},loc:null};
 
-  // The next 7 dates in Brisbane time
+  // The next 7 dates in the location's time zone
   function dates(){const t=Date.parse(localDate(Date.now())+"T00:00:00Z");return Array.from({length:7},(_,i)=>new Date(t+i*864e5).toISOString().slice(0,10));}
   function siteSrc(id){const s=state.data?.scraped?.sources;return Array.isArray(s)?s.find(x=>x.source===id)||null:null;}
   function siteDay(id,k){const s=siteSrc(id);return (s&&(s.days||[]).find(d=>d.date===k))||null;}
@@ -278,31 +288,34 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
       out.push({name:s.name,c:s.c,tmax:d.tmax,tmin:d.tmin,rain:isNum(d.rain_max)?d.rain_max:d.rain_min,rainText:rangeText(d.rain_min,d.rain_max,d.rain_text),chance:d.chance,sub:[d.text,src.point].filter(Boolean).join(" · ")});});
     return out.filter(r=>isNum(r.tmax)||isNum(r.tmin)||isNum(r.rain));}
   function agreement(rows){const v=rows.map(r=>r.tmax).filter(isNum);if(v.length<2)return{cls:"",label:"n/a",spread:null};const s=Math.max(...v)-Math.min(...v);return{spread:s,cls:s<=2?"":s<=4?"mid":"low",label:s<=2?"Agree":s<=4?"Some spread":"Disagree"};}
-  // Station reading: the Bureau's live feed if the browser got it, otherwise the scraper's Archerfield reading
+  // Station reading: the Bureau's live feed if the browser got it, otherwise the scraper's copy
   function obsNow(){const D=state.data,o=D.bom&&D.bom.obs,so=D.scraped&&D.scraped.observations;
-    if(o&&isNum(o.temp))return{temp:o.temp,feels:o.temp_feels_like,hum:o.humidity,wind:o.wind?.speed_kilometre,dir:o.wind?.direction,gust:o.gust?.speed_kilometre,rain:o.rain_since_9am,station:o.station?.name};
-    if(so&&isNum(so.temp))return{temp:so.temp,feels:so.feels_like,hum:so.humidity,wind:so.wind_kmh,dir:so.wind_dir,gust:so.gust_kmh,rain:so.rain_since_9am,station:so.station,at:so.time};
+    if(o&&isNum(o.temp))return{temp:o.temp,feels:o.temp_feels_like,hum:o.humidity,wind:o.wind?.speed_kilometre,dir:o.wind?.direction,gust:o.gust?.speed_kilometre,rain:o.rain_since_9am,station:o.station?.name,km:isNum(o.station?.distance)?o.station.distance/1000:null};
+    if(so&&isNum(so.temp))return{temp:so.temp,feels:so.feels_like,hum:so.humidity,wind:so.wind_kmh,dir:so.wind_dir,gust:so.gust_kmh,rain:so.rain_since_9am,station:so.station,km:so.distance_km,at:so.time};
     return null;}
 
   async function load(){
     const btn=$("refresh");btn.disabled=true;$("status").textContent="Fetching forecasts…";$("err").hidden=true;
+    const forLoc=state.loc.id;
     try{
       const [bom,scr]=await Promise.all([loadBom().catch(()=>null),loadScraped().catch(()=>({state:"error"}))]);
+      if(state.loc.id!==forLoc)return;  // location changed while this was loading
       state.scrape=scr;
       // Keep the last scraped data we had if this fetch failed
       const scraped=scr.state==="ok"?scr.data:(scr.state==="error"?state.data?.scraped||null:null);
       const bomOk=bom&&(bom.ok||bom.obs);
       if(!bomOk&&!scraped)throw new Error("nothing reachable");
       state.data={bom:bomOk?bom:null,scraped,fetched:Date.now()};
-      try{localStorage.setItem(CACHE,JSON.stringify(state.data));}catch(e){}
+      try{localStorage.setItem(cacheKey(),JSON.stringify(state.data));}catch(e){}
       render();
     }catch(e){
-      let cached=null;try{cached=JSON.parse(localStorage.getItem(CACHE)||"null");}catch(_){}
+      if(state.loc.id!==forLoc)return;
+      let cached=null;try{cached=JSON.parse(localStorage.getItem(cacheKey())||"null");}catch(_){}
       const msg="Couldn't reach the Bureau of Meteorology or the forecast sites. Check your internet connection, then tap Refresh.";
       if(cached){state.data=cached;render();$("err").textContent=msg+" Showing the last forecast saved on this device.";}
       else{$("err").textContent=msg;$("status").textContent="No data yet";renderSites();}
       $("err").hidden=false;
-    }finally{btn.disabled=false;}
+    }finally{if(state.loc.id===forLoc)btn.disabled=false;}
   }
 
   function render(){
@@ -317,7 +330,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
         <div><dt>Wind</dt><dd>${f0(ob.wind)} ${esc(ob.dir||"")}</dd></div>
         <div><dt>Gusts</dt><dd>${f0(ob.gust)} km/h</dd></div>
         <div><dt>Rain since 9am</dt><dd>${f1(ob.rain)} mm</dd></div></dl>`;
-      $("obs").textContent="Bureau of Meteorology reading from "+(ob.station?ob.station+" station":"the nearest station")+(ob.at?" at "+new Date(ob.at).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"}):"")+".";
+      $("obs").textContent="Bureau of Meteorology reading from "+(ob.station?ob.station+" station":"the nearest station")+(isNum(ob.km)?", "+f0(ob.km)+" km away":"")+(ob.at?", at "+new Date(ob.at).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit",timeZone:state.loc.tz}):"")+".";
     }else{
       $("now").innerHTML=`<div class="temp num">–</div><div><div class="cond">No station reading</div><div class="note">Tap Refresh to try again</div></div>`;
     }
@@ -372,10 +385,10 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
         const d=siteDay(p.id,k);if(!d)return empty(p,"No forecast for this day.");
         return fc(p,{tmax:d.tmax,tmin:d.tmin,rainText:rangeText(d.rain_min,d.rain_max,d.rain_text),chance:d.chance,text:d.text},!src.point?"":p.id==="windy"?"Weather model: "+src.point.replace(/ model$/,""):"Forecast point: "+src.point);}
       if(p.kind==="meteye"){const b=bomDay(k);if(!b)return empty(p,"No Bureau forecast for this day.");
-        return fc(p,{tmax:b.tmax,tmin:b.tmin,rainText:rangeText(b.rmin,b.rmax),chance:b.chance,text:b.text},"Bureau grid forecast for Oxley (same as the BOM row)");}
+        return fc(p,{tmax:b.tmax,tmin:b.tmin,rainText:rangeText(b.rmin,b.rmax),chance:b.chance,text:b.text},"Bureau grid forecast for "+state.loc.name+" (same as the BOM row)");}
       if(p.kind==="obs"){const o=obsNow();if(!o)return empty(p,"No station reading right now.");
         return card(p,`<span class="ct">${f1(o.temp)}°C <span>now</span></span><span class="cr">Feels ${f0(o.feels)}° · ${f0(o.hum)}% · ${f0(o.wind)} km/h ${esc(o.dir||"")}</span>
-          <span class="cx">${esc(o.station||"Nearest station")}${o.at?", "+esc(new Date(o.at).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"})):""}</span><span class="cd">Latest reading, not a forecast</span>`);}
+          <span class="cx">${esc(o.station||"Nearest station")}${isNum(o.km)?" ("+f0(o.km)+" km)":""}${o.at?", "+esc(new Date(o.at).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit",timeZone:state.loc.tz})):""}</span><span class="cd">Latest reading, not a forecast</span>`);}
       return "";
     }).join("");
   }
@@ -451,7 +464,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     else if(st==="error")$("sitesNote").textContent="Couldn't reach the forecast data. Tap Refresh to try again.";
     else $("sitesNote").textContent="Figures from the forecast sites below are collected every 3 hours and shown in the table and chart above. Windy covers about 6 days.";
     if(!S){$("sites").innerHTML="";return;}
-    const tile=(name,src,e,okText)=>{if(!src)return `<div class="${e?"failed":""}">${esc(name)}<span>${e?"Failed: "+esc(e):"Not set up yet"}</span></div>`;
+    const tile=(name,src,e,okText)=>{if(!src)return `<div class="${e?"failed":""}">${esc(name)}<span>${e?"Failed: "+esc(e):"No data yet"}</span></div>`;
       const old=Date.now()-Date.parse(src.fetched)>12*3600e3;
       return `<div class="${e?"failed":old?"stale":""}">${esc(name)}<span>${e?"Last run failed; showing data from "+ago(src.fetched):okText||"Updated "+ago(src.fetched)}</span></div>`;};
     $("sites").innerHTML=[{id:"bom",name:"BOM (scraped copy)"},...SITES].map(s=>tile(s.name,siteSrc(s.id),errs[s.id])).join("")+
@@ -459,11 +472,35 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
   }
   $("days").addEventListener("click",e=>{const b=e.target.closest(".day");if(!b)return;state.sel=+b.dataset.i;document.querySelectorAll(".day").forEach(d=>d.setAttribute("aria-pressed",String(+d.dataset.i===state.sel)));renderDay();renderChart();});
   document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{state.measure=b.dataset.m;document.querySelectorAll(".seg button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));if(state.data)renderChart();}));
-  $("refresh").addEventListener("click",load);
+  $("refresh").addEventListener("click",()=>{if(state.loc)load();});
   if(window.matchMedia)matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change",()=>state.data&&renderChart());
-  try{const c=JSON.parse(localStorage.getItem(CACHE)||"null");if(c){state.data=c;render();}}catch(e){}
-  renderSites();
-  load();
+
+  // Switch location: show what this device last saved for it straight away, then fetch fresh figures
+  function setLoc(id){
+    state.loc=LOCS.find(l=>l.id===id)||LOCS.find(l=>l.id==="oxley")||LOCS[0];
+    const L=state.loc;$("loc").value=L.id;
+    try{localStorage.setItem(LOC_KEY,L.id);}catch(e){}
+    // Keep the choice in the link too, so a shared link opens on the same place
+    try{const u=new URL(location.href);u.searchParams.set("loc",L.id);history.replaceState(null,"",u);}catch(e){}
+    $("eyebrow").textContent=`Forecast compare · ${L.state} ${L.postcode} · ${Math.abs(L.lat).toFixed(2)}°S ${L.lon.toFixed(2)}°E`;
+    document.title=L.name+" Forecast Compare";
+    state.sel=0;state.scrape={state:"pending"};state.data=null;hideTip();
+    try{state.data=JSON.parse(localStorage.getItem(cacheKey())||"null");}catch(e){}
+    if(state.data)render();
+    else{$("now").innerHTML=`<div class="temp num">–</div><div><div class="cond">Loading…</div><div class="note">Feels like –</div></div>`;
+      $("obs").textContent="A real reading from the nearest Bureau of Meteorology station.";
+      ["days","panel","summary","tbody","chart","legend"].forEach(x=>$(x).innerHTML="");renderSites();}
+    load();
+  }
+  try{localStorage.removeItem(CACHE);}catch(e){}  // single-location cache from before locations were added
+  fetch("locations.json",{cache:"no-cache"}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();}).then(list=>{
+    LOCS=list;
+    $("loc").innerHTML=LOCS.map(l=>`<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
+    // From the link (?loc=), else the last one used on this device, else Oxley
+    let id=null;try{id=new URL(location.href).searchParams.get("loc")||localStorage.getItem(LOC_KEY);}catch(e){}
+    setLoc(id||"oxley");
+  }).catch(()=>{$("err").textContent="Couldn't load the list of locations. Check your internet connection, then reload the page.";$("err").hidden=false;$("status").textContent="No data yet";});
+  $("loc").addEventListener("change",e=>setLoc(e.target.value));
 })();
 </script>
 </body>

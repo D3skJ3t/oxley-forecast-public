@@ -1,12 +1,19 @@
-name: Scrape Oxley forecasts
+name: Scrape forecasts
 
 on:
   push:
     branches: [main]
-    paths: ["scraper/**", ".github/workflows/**"]
+    paths: ["scraper/**", ".github/workflows/**", "locations.json"]
   workflow_dispatch:
+    inputs:
+      all:
+        description: "Update every location now (otherwise only the ones due)"
+        type: boolean
+        default: false
   schedule:
-    - cron: "47 */3 * * *"   # every 3 hours
+    # Every 30 minutes; each run updates only the one or two locations that are due,
+    # so every location refreshes about every 3 hours without hitting the sites all at once
+    - cron: "7,37 * * * *"
 
 permissions:
   contents: write
@@ -18,7 +25,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,10 +33,16 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: |
-          pip install requests==2.32.3 playwright==1.47.0 beautifulsoup4==4.12.3
+          pip install requests==2.32.3 playwright==1.47.0 beautifulsoup4==4.12.3 tzdata
           python -m playwright install --with-deps chromium
       - name: Scrape
-        run: python scraper/scrape.py
+        # A change to the scraper or the location list refreshes everything once
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.all }}" = "true" ]; then
+            python scraper/scrape.py --all
+          else
+            python scraper/scrape.py
+          fi
       - name: Commit results
         run: |
           git config user.name "github-actions[bot]"
