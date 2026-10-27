@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCATIONS = os.path.join(ROOT, "locations.json")
 DATA = os.path.join(ROOT, "data")
-PER_RUN = 2
+PER_RUN = 6  # 31 locations over six half-hourly runs: about every 3 hours each
 DUE_MINUTES = 165  # a little under 3 hours, so a late run doesn't push a location past its slot
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
@@ -71,6 +71,12 @@ def get(url, headers=None, **kw):
     r = requests.get(url, headers={**HEADERS, **(headers or {})}, timeout=30, **kw)
     r.raise_for_status()
     return r
+
+
+def compass(deg):
+    if deg is None:
+        return None
+    return ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"][round(deg / 22.5) % 16]
 
 
 def with_point(out, loc, place):
@@ -292,18 +298,28 @@ def scrape_windy(loc):
     offset = timedelta(hours=header.get("utcOffset", 10))
     k2c = lambda k: None if k is None else round(k - 273.15, 1)
     data = payload.get("data") or {}
-    rain, steps = {}, {}
-    for ts, mm in zip(data.get("ts") or [], data.get("precipAmount") or []):
+    rain, steps, wind = {}, {}, {}
+    n = len(data.get("ts") or [])
+    col = lambda k: (data.get(k) or [None] * n)
+    for ts, mm, w, g, wd in zip(data.get("ts") or [], col("precipAmount"), col("wind"), col("windGust"), col("windDir")):
         d = (datetime.fromtimestamp(ts / 1000, timezone.utc) + offset).date().isoformat()
         rain[d] = rain.get(d, 0) + (mm or 0)
         steps[d] = steps.get(d, 0) + 1
+        # Wind and gusts come in metres per second; keep each day's strongest, in km/h
+        if w is not None:
+            cur = wind.setdefault(d, {"wind_max": 0, "gust_max": 0, "wind_dir": None})
+            if w * 3.6 > cur["wind_max"]:
+                cur["wind_max"], cur["wind_dir"] = round(w * 3.6), compass(wd)
+            if g is not None:
+                cur["gust_max"] = max(cur["gust_max"], round(g * 3.6))
     days = []
     for s in payload.get("summary") or []:
         d = (datetime.fromtimestamp(s["timestamp"] / 1000, timezone.utc) + offset).date().isoformat()
         # Only total rain for days the 3-hourly series fully covers; the last day is often cut short
-        mm = round(rain[d], 1) if steps.get(d, 0) >= s.get("segments", 8) else None
-        days.append(day(d, k2c(s.get("tempMax")), k2c(s.get("tempMin")),
-                        None if mm is None else f"{mm:g} mm", mm, mm))
+        full = steps.get(d, 0) >= s.get("segments", 8)
+        mm = round(rain[d], 1) if full else None
+        days.append({**day(d, k2c(s.get("tempMax")), k2c(s.get("tempMin")),
+                           None if mm is None else f"{mm:g} mm", mm, mm), **(wind.get(d, {}) if full else {})})
     if not days:
         raise ValueError("forecast response had no daily summary")
     out = {"source": "windy", "name": "Windy", "url": url, "days": days}
@@ -327,9 +343,50 @@ def scrape_observations(loc):
             "rain_since_9am": num(d.get("rain_since_9am"))}
 
 
+# ---- Boating: tides and swell from WillyWeather, for coastal locations only ----
+def ww_graph(html, key):
+    """Hourly points of one WillyWeather forecast graph (e.g. swell-height), or [] if the page has none."""
+    i = html.find('{"forecastGraphs"')
+    if i < 0:
+        return []
+    graphs, _ = json.JSONDecoder().raw_decode(html[i:])
+    series = ((graphs.get("forecastGraphs") or {}).get(key) or {}).get("dataConfig", {}).get("series", {})
+    return [p for g in series.get("groups") or [] for p in g.get("points") or []]
+
+
+def scrape_marine(loc):
+    if loc.get("water") != "coast":
+        return None  # lakes and inland places: wind comes from the Bureau and Windy, no tides or swell
+    tz = ZoneInfo(loc["tz"])
+    path = loc["willyweather"]
+    tides = {}
+    soup = BeautifulSoup(get(f"https://tides.willyweather.com.au/{path}.html").text, "html.parser")
+    for li in soup.select("section.forecast li.day"):
+        t = li.find("time")
+        if not t:
+            continue
+        tides[t["datetime"]] = [{"type": "high" if "point-high" in (p.get("class") or []) else "low",
+                                 "time": clean(p.find("h3").get_text()), "height_m": num(clean(p.find("span").get_text()).replace(" m", ""))}
+                                for p in li.select("li.point-high, li.point-low") if p.find("h3") and p.find("span")]
+    swell = {}
+    html = get(f"https://swell.willyweather.com.au/{path}.html").text
+    heights, periods = ww_graph(html, "swell-height"), ww_graph(html, "swell-period")
+    period_at = {p["x"]: p.get("y") for p in periods}
+    for p in heights:
+        if p.get("y") is None:
+            continue
+        d = datetime.fromtimestamp(p["x"], timezone.utc).astimezone(tz).date().isoformat()
+        cur = swell.get(d)
+        if cur is None or p["y"] > cur["max_m"]:
+            swell[d] = {"max_m": p["y"], "dir": p.get("directionText"), "period_s": num(round(period_at.get(p["x"]) or 0)) or None}
+    if not tides and not swell:
+        raise ValueError("no tide or swell forecast on WillyWeather for this place")
+    return {"source": "willyweather", "url": f"https://tides.willyweather.com.au/{path}.html", "tides": tides, "swell": swell}
+
+
 SCRAPERS = [scrape_bom, scrape_willyweather, scrape_elders, scrape_weatherzone, scrape_wunderground,
             scrape_windy]
-EXTRAS = [scrape_observations]  # written as top-level "observations"
+EXTRAS = [scrape_observations, scrape_marine]  # written as top-level "observations" and "marine"
 
 
 def masked(e):
@@ -347,11 +404,15 @@ def scrape_location(loc):
     result = {}
     for fn in EXTRAS:
         key = fn.__name__.replace("scrape_", "")
-        ran += 1
         try:
-            result[key] = {**fn(loc), "fetched": now_iso()}
+            r = fn(loc)
+            if r is None:
+                continue  # doesn't apply to this location
+            ran += 1
+            result[key] = {**r, "fetched": now_iso()}
             print(f"  {key}: ok")
         except Exception as e:
+            ran += 1
             errors[key] = masked(e)
             traceback.print_exc()
             if prev.get(key):
