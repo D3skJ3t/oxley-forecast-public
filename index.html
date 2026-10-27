@@ -121,6 +121,7 @@ svg{display:block;width:100%;height:auto;max-width:100%}
 .tip .tn{font-weight:700;display:flex;align-items:center;gap:6px}
 .tip .tn i{width:9px;height:9px;border-radius:2px;display:inline-block}
 .tip .td{font:.7rem var(--mono);color:var(--muted)}
+.tip .tc{font:600 .68rem var(--mono);color:var(--accent);margin-bottom:2px}
 .tip .tv{font:.78rem var(--mono);color:var(--muted)}
 .tip .tv b{color:var(--fg);font-weight:600}
 /* Your weather sites panel */
@@ -245,8 +246,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     {kind:"site",id:"wunderground",name:"Weather Underground",dom:"wunderground.com",c:"--s5"},
     {kind:"meteye",name:"BOM MetEye",dom:"bom.gov.au/australia/meteye",c:"--bom"},
     {kind:"obs",name:"BOM Latest Observations",dom:"bom.gov.au/qld/observations",c:"--bom"},
-    {kind:"site",id:"elders",name:"Elders Weather",dom:"eldersweather.com.au",c:"--s3"},
-    {kind:"none",name:"Rain Parrot",dom:"rainparrot.com.au",c:"--muted"}];
+    {kind:"site",id:"elders",name:"Elders Weather",dom:"eldersweather.com.au",c:"--s3"}];
   async function loadScraped(){
     const r=await fetch(DATA_URL,{cache:"no-store"});
     if(!r.ok)throw new Error("scraped "+r.status);
@@ -376,7 +376,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
       if(p.kind==="obs"){const o=obsNow();if(!o)return empty(p,"No station reading right now.");
         return card(p,`<span class="ct">${f1(o.temp)}°C <span>now</span></span><span class="cr">Feels ${f0(o.feels)}° · ${f0(o.hum)}% · ${f0(o.wind)} km/h ${esc(o.dir||"")}</span>
           <span class="cx">${esc(o.station||"Nearest station")}${o.at?", "+esc(new Date(o.at).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"})):""}</span><span class="cd">Latest reading, not a forecast</span>`);}
-      return empty(p,"No figures to show: Rain Parrot is an iPhone app with no website. It shows Bureau radar.");
+      return "";
     }).join("");
   }
 
@@ -406,18 +406,25 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     $("legend").innerHTML=lines.map(l=>`<span><i style="${l.dash?"height:2px;background:repeating-linear-gradient(90deg,var(--bom) 0 5px,transparent 5px 8px)":`background:repeating-linear-gradient(90deg,var(${l.m.c}) 0 2px,transparent 2px 5px)`}"></i>${esc(l.m.name)}</span>`).join("");
   }
 
-  // Hover (or tap) a dot to see that source's full figures for that day
-  function hideTip(){$("tip").hidden=true;const h=document.getElementById("hl");if(h)h.setAttribute("visibility","hidden");}
+  // Hover (or tap) a dot to see that source's full figures for that day.
+  // Where dots overlap, each click or tap steps to the next source at that spot.
+  function hideTip(){$("tip").hidden=true;state.cyc=null;const h=document.getElementById("hl");if(h)h.setAttribute("visibility","hidden");}
   function chartPoint(e){
     const svg=$("chart").querySelector("svg");if(!svg||!state.pts||!state.pts.length)return;
     const r=svg.getBoundingClientRect(),k=360/r.width,px=(e.clientX-r.left)*k,py=(e.clientY-r.top)*k;
-    let best=null,bd=Infinity;state.pts.forEach(p=>{const d=Math.hypot(p.x-px,p.y-py);if(d<bd){bd=d;best=p;}});
-    if(!best||bd>20){hideTip();return;}
+    let near=null,bd=Infinity;state.pts.forEach(p=>{const d=Math.hypot(p.x-px,p.y-py);if(d<bd){bd=d;near=p;}});
+    if(!near||bd>20){hideTip();return;}
+    // Dots on the same day whose centres sit within 5 units of each other count as one overlapping spot
+    const group=state.pts.filter(p=>p.i===near.i&&Math.abs(p.y-near.y)<=5);
+    const key=near.i+":"+group.map(p=>p.name).join("|");
+    if(e.type==="pointerdown")state.cyc=state.cyc&&state.cyc.key===key?{key,idx:(state.cyc.idx+1)%group.length}:{key,idx:0};
+    else if(!state.cyc||state.cyc.key!==key)state.cyc={key,idx:0};  // hovering keeps whichever dot was clicked to
+    const best=group[state.cyc.idx];
     const day=dates()[best.i],row=rowsFor(day).find(x=>x.name===best.name);if(!row){hideTip();return;}
     const dt=new Date(day+"T12:00:00"),m=state.measure;
     const part=(key,label,val)=>m===key?`<b>${label} ${val}</b>`:`${label} ${val}`;
     const tip=$("tip");
-    tip.innerHTML=`<div class="tn"><i style="background:var(${best.c})"></i>${esc(row.name)}</div>
+    tip.innerHTML=`${group.length>1?`<div class="tc">${state.cyc.idx+1} of ${group.length} here · ${e.pointerType==="mouse"?"click":"tap"} again for the next</div>`:""}<div class="tn"><i style="background:var(${best.c})"></i>${esc(row.name)}</div>
       <div class="td">${dt.toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"})}${row.sub?" · "+esc(row.sub):""}</div>
       <div class="tv">${part("tmax","Max",isNum(row.tmax)?f0(row.tmax)+"°":"–")} · ${part("tmin","Min",isNum(row.tmin)?f0(row.tmin)+"°":"–")}</div>
       <div class="tv">${part("rain","Rain",row.rainText==="–"?"–":esc(row.rainText)+" mm")}${isNum(row.chance)?" · "+f0(row.chance)+"% chance":""}</div>`;
