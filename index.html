@@ -247,7 +247,9 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     return out;
   }
   // Scraped forecast sites: published by this repo's own scraper, each location about every 3 hours
-  const dataUrl=()=>"https://raw.githubusercontent.com/D3skJ3t/oxley-forecast-public/main/data/"+state.loc.id+".json";
+  // Locations and figures now live in the aus-forecast repo, whose scraper keeps them up to date
+  const SRC="https://raw.githubusercontent.com/D3skJ3t/aus-forecast/main/";
+  const dataUrl=()=>SRC+"data/"+state.loc.id+".json";
   const SITES=[{id:"weatherzone",name:"Weatherzone",c:"--s1"},{id:"willyweather",name:"WillyWeather",c:"--s2"},{id:"elders",name:"Elders Weather",c:"--s3"},{id:"wunderground",name:"Weather Underground",c:"--s5"},{id:"windy",name:"Windy",c:"--s6"}];
   // Harris's list, in his order, for the "Your weather sites" panel
   const PANEL=[{kind:"site",id:"weatherzone",name:"Weatherzone",dom:"weatherzone.com.au",c:"--s1"},
@@ -493,7 +495,7 @@ section{display:flex;flex-direction:column;gap:10px;min-width:0}
     load();
   }
   try{localStorage.removeItem(CACHE);}catch(e){}  // single-location cache from before locations were added
-  fetch("locations.json",{cache:"no-cache"}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();}).then(list=>{
+  fetch(SRC+"locations.json",{cache:"no-cache"}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();}).then(list=>{
     LOCS=list;
     $("loc").innerHTML=LOCS.map(l=>`<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
     // From the link (?loc=), else the last one used on this device, else Oxley
